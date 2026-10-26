@@ -79,9 +79,8 @@ text = %(servers:
     protocolType: tls
 options:
   socket:
-    maximumNumberOfRetriesForPerIpAddress: 1
-    maximumNumberOfRetriesForIpv4ConnectionFailure: 6
-    maximumNumberOfRetriesForIpv6ConnectionFailure: 2
+    maximumIpv4Attempts: 6
+    maximumIpv6Attempts: 2
   addrinfo:
     answerSafetyFirst: true
     maximumNumberOfMismatchRetries: 3
@@ -96,7 +95,6 @@ options:
     maximumCountOfAuthority: 128
     maximumCountOfAdditional: 128
     maximumDepthOfCanonicalName: 64
-    maximumSizeOfPerChunk: 2048
     maximumSizeOfPacket: 65535
 caching:
   serviceMapper:

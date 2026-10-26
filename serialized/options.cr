@@ -17,22 +17,19 @@ module DNS::Serialized
       struct Socket
         include YAML::Serializable
 
-        property maximumNumberOfRetriesForPerIpAddress : UInt8
-        property maximumNumberOfRetriesForIpv4ConnectionFailure : UInt8
-        property maximumNumberOfRetriesForIpv6ConnectionFailure : UInt8
+        property maximumIpv4Attempts : UInt8
+        property maximumIpv6Attempts : UInt8
 
         def initialize
-          @maximumNumberOfRetriesForPerIpAddress = 1_u8
-          @maximumNumberOfRetriesForIpv4ConnectionFailure = 2_u8
-          @maximumNumberOfRetriesForIpv6ConnectionFailure = 2_u8
+          @maximumIpv4Attempts = 2_u8
+          @maximumIpv6Attempts = 2_u8
         end
 
         def unwrap : DNS::Options::Socket
           socket = DNS::Options::Socket.new
 
-          socket.maximumNumberOfRetriesForPerIpAddress = maximumNumberOfRetriesForPerIpAddress
-          socket.maximumNumberOfRetriesForIpv4ConnectionFailure = maximumNumberOfRetriesForIpv4ConnectionFailure
-          socket.maximumNumberOfRetriesForIpv6ConnectionFailure = maximumNumberOfRetriesForIpv6ConnectionFailure
+          socket.maximumIpv4Attempts = maximumIpv4Attempts
+          socket.maximumIpv6Attempts = maximumIpv6Attempts
 
           socket
         end
@@ -82,7 +79,6 @@ module DNS::Serialized
         property maximumCountOfAuthority : UInt16
         property maximumCountOfAdditional : UInt16
         property maximumDepthOfCanonicalName : UInt8
-        property maximumSizeOfPerChunk : UInt16
         property maximumSizeOfPacket : UInt16
 
         def initialize
@@ -91,7 +87,6 @@ module DNS::Serialized
           @maximumCountOfAuthority = 128_u16
           @maximumCountOfAdditional = 128_u16
           @maximumDepthOfCanonicalName = 64_u8
-          @maximumSizeOfPerChunk = 2048_u16
           @maximumSizeOfPacket = 65535_u16
         end
 
@@ -103,7 +98,6 @@ module DNS::Serialized
           packet.maximumCountOfAuthority = maximumCountOfAuthority
           packet.maximumCountOfAdditional = maximumCountOfAdditional
           packet.maximumDepthOfCanonicalName = maximumDepthOfCanonicalName
-          packet.maximumSizeOfPerChunk = maximumSizeOfPerChunk
           packet.maximumSizeOfPacket = maximumSizeOfPacket
 
           packet

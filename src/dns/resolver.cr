@@ -15,12 +15,12 @@ class DNS::Resolver
     @options
   end
 
-  def maximum_number_of_retries_for_ipv4_connection_failure(caller : Symbol?, delegator : Symbol) : UInt8
-    options.socket.maximumNumberOfRetriesForIpv4ConnectionFailure
+  def maximum_ipv4_attempts(caller : Symbol?, delegator : Symbol) : UInt8
+    options.socket.maximumIpv4Attempts
   end
 
-  def maximum_number_of_retries_for_ipv6_connection_failure(caller : Symbol?, delegator : Symbol) : UInt8
-    options.socket.maximumNumberOfRetriesForIpv6ConnectionFailure
+  def maximum_ipv6_attempts(caller : Symbol?, delegator : Symbol) : UInt8
+    options.socket.maximumIpv6Attempts
   end
 
   def getaddrinfo(host : String, port : Int32 = 0_i32, caller : Symbol? = nil, answer_safety_first : Bool? = options.addrinfo.answerSafetyFirst, addrinfo_overridable : Bool? = nil) : Tuple(Symbol, FetchType, Array(Socket::IPAddress))
@@ -61,7 +61,7 @@ class DNS::Resolver
     dns_servers = nil if dns_servers.try &.empty?
     dns_servers = dnsServers unless dns_servers
 
-    packets = getaddrinfo_query_ip_records dns_servers: dns_servers, host: host, class_type: Packet::ClassFlag::Internet
+    packets = query_ip_records dns_servers: dns_servers, host: host, class_type: Packet::ClassFlag::Internet
     ip_addresses = select_packet_answers_records_ip_addresses host: host, packets: packets, options: options
 
     caching_entry = ipAddressCaching.set host: host, ipv4_addresses: ip_addresses.first, ipv6_addresses: ip_addresses.last
@@ -201,12 +201,12 @@ class DNS::Resolver
     value.to_set
   end
 
-  private def getaddrinfo_query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
-    return concurrent_getaddrinfo_query_ip_records dns_servers: dns_servers, host: host, class_type: class_type if options.addrinfo.concurrentQuery
-    regular_getaddrinfo_query_ip_records dns_servers: dns_servers, host: host, class_type: class_type
+  private def query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
+    return concurrent_query_ip_records dns_servers: dns_servers, host: host, class_type: class_type if options.addrinfo.concurrentQuery
+    regular_query_ip_records dns_servers: dns_servers, host: host, class_type: class_type
   end
 
-  private def concurrent_getaddrinfo_query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
+  private def concurrent_query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
     concurrent_mutex = Mutex.new :unchecked
     concurrent_fibers = Set(Fiber).new
     reply_mutex = Mutex.new :unchecked
@@ -216,28 +216,28 @@ class DNS::Resolver
       case options.addrinfo.queryType
       in .ipv4_only?
         ipv4_query_fiber = spawn do
-          ipv4_packets = getaddrinfo_query_a_records dns_servers: dns_servers, host: host, class_type: class_type
+          ipv4_packets = query_a_records dns_servers: dns_servers, host: host, class_type: class_type
           reply_mutex.synchronize { reply_packets << ipv4_packets }
         end
 
         concurrent_mutex.synchronize { concurrent_fibers << ipv4_query_fiber }
       in .ipv6_only?
         ipv6_query_fiber = spawn do
-          ipv6_packets = getaddrinfo_query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
+          ipv6_packets = query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
           reply_mutex.synchronize { reply_packets << ipv6_packets }
         end
 
         concurrent_mutex.synchronize { concurrent_fibers << ipv6_query_fiber }
       in .both?
         ipv4_query_fiber = spawn do
-          ipv4_packets = getaddrinfo_query_a_records dns_servers: dns_servers, host: host, class_type: class_type
+          ipv4_packets = query_a_records dns_servers: dns_servers, host: host, class_type: class_type
           reply_mutex.synchronize { reply_packets << ipv4_packets }
         end
 
         concurrent_mutex.synchronize { concurrent_fibers << ipv4_query_fiber }
 
         ipv6_query_fiber = spawn do
-          ipv6_packets = getaddrinfo_query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
+          ipv6_packets = query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
           reply_mutex.synchronize { reply_packets << ipv6_packets }
         end
 
@@ -254,16 +254,16 @@ class DNS::Resolver
     end
   end
 
-  private def regular_getaddrinfo_query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
+  private def regular_query_ip_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
     case options.addrinfo.queryType
     in .ipv4_only?
-      getaddrinfo_query_a_records dns_servers: dns_servers, host: host, class_type: class_type
+      query_a_records dns_servers: dns_servers, host: host, class_type: class_type
     in .ipv6_only?
-      ipv6_packets = getaddrinfo_query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
+      ipv6_packets = query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
     in .both?
-      packets = getaddrinfo_query_a_records dns_servers: dns_servers, host: host, class_type: class_type
+      packets = query_a_records dns_servers: dns_servers, host: host, class_type: class_type
 
-      ipv6_packets = getaddrinfo_query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
+      ipv6_packets = query_aaaa_records dns_servers: dns_servers, host: host, class_type: class_type
       ipv6_packets.each { |packet| packets << packet }
 
       packets
@@ -271,26 +271,49 @@ class DNS::Resolver
   end
 
   {% for record_type in ["a", "aaaa"] %}
-  private def getaddrinfo_query_{{record_type.id}}_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
-    getaddrinfo_query! dns_servers: dns_servers, host: host, record_type: Packet::RecordFlag::{{record_type.upcase.id}}, class_type: class_type
+  private def query_{{record_type.id}}_records(dns_servers : Set(Address), host : String, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
+    resolve dns_servers: dns_servers, host: host, record_type: Packet::RecordFlag::{{record_type.upcase.id}}, class_type: class_type
   end
   {% end %}
 
-  private def getaddrinfo_query!(dns_servers : Set(Address), host : String, record_type : Packet::RecordFlag, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
-    ask_packet = Packet.create_getaddrinfo_ask protocol_type: ProtocolType::UDP, name: host, record_type: record_type, class_type: class_type
-    resolve! dns_servers: dns_servers, ask_packet: ask_packet
+  private def resolve(dns_servers : Set(Address), host : String, record_type : Packet::RecordFlag, class_type : Packet::ClassFlag = Packet::ClassFlag::Internet) : Array(Packet)
+    ask_packet = Packet.create_query_packet protocol_type: ProtocolType::UDP, name: host, record_type: record_type, class_type: class_type
+    resolve dns_servers: dns_servers, ask_packet: ask_packet
   end
 
   def resolve(host : String, record_type : Packet::RecordFlag, ask_packet : Packet) : Tuple(FetchType, Array(Packet))
-    packetCaching.get?(host: host, record_type: record_type).try { |packets| return Tuple.new FetchType::Caching, packets }
-
-    packets = resolve! dns_servers: dnsServers, ask_packet: ask_packet
-    packetCaching.set host: host, record_type: record_type, packets: packets
-
-    Tuple.new FetchType::Remote, packets
+    fetch_type, packets, _rcode = resolve_with_rcode host: host, record_type: record_type, ask_packet: ask_packet
+    Tuple.new fetch_type, packets
   end
 
-  private def resolve!(dns_servers : Set(Address), ask_packet : Packet) : Array(Packet)
+  # Like `resolve`, and also returns the outcome, so that an empty result can be told apart:
+  # `NoError` (some server answered NOERROR; packets may hold no answers), `NameError` (NXDOMAIN),
+  # another rcode (e.g. `ServerFailure`, `Refused`), or `nil` when no server replied (timeout or unreachable).
+  # Packets are always the NOERROR replies only, and only those are cached, exactly as with `resolve`.
+  def resolve_with_rcode(host : String, record_type : Packet::RecordFlag, ask_packet : Packet) : Tuple(FetchType, Array(Packet), Packet::ErrorFlag?)
+    packetCaching.get?(host: host, record_type: record_type).try { |packets| return Tuple.new FetchType::Caching, packets, Packet::ErrorFlag::NoError }
+
+    replies = resolve_replies dns_servers: dnsServers, ask_packet: ask_packet
+    packets = replies.select &.errorType.no_error?
+    packetCaching.set host: host, record_type: record_type, packets: packets
+
+    Tuple.new FetchType::Remote, packets, Resolver.reply_rcode(replies)
+  end
+
+  # NOERROR wins over NXDOMAIN, which wins over any other rcode; nil when there is no reply.
+  def self.reply_rcode(replies : Array(Packet)) : Packet::ErrorFlag?
+    rcodes = replies.map &.errorType
+    return Packet::ErrorFlag::NoError if rcodes.any? &.no_error?
+    return Packet::ErrorFlag::NameError if rcodes.any? &.name_error?
+    rcodes.first?
+  end
+
+  private def resolve(dns_servers : Set(Address), ask_packet : Packet) : Array(Packet)
+    resolve_replies(dns_servers: dns_servers, ask_packet: ask_packet).select &.errorType.no_error?
+  end
+
+  # One reply per server that replied, whatever its rcode.
+  private def resolve_replies(dns_servers : Set(Address), ask_packet : Packet) : Array(Packet)
     return concurrent_resolve dns_servers: dns_servers, ask_packet: ask_packet if options.addrinfo.concurrentQuery
     regular_resolve dns_servers: dns_servers, ask_packet: ask_packet
   end
@@ -317,10 +340,10 @@ class DNS::Resolver
           when UDPSocket
             reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
 
-            unless reply
+            unless reply.try &.errorType.no_error?
               options.addrinfo.maximumNumberOfMismatchRetries.times do
-                reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
-                break if reply
+                reply = (resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil) || reply
+                break if reply.try &.errorType.no_error?
               end
             end
 
@@ -338,6 +361,12 @@ class DNS::Resolver
 
             socket.close rescue nil
             reply.try { |_reply| reply_mutex.synchronize { reply_packets << _reply } }
+
+            case socket
+            when OpenSSL::SSL::Socket::Client
+              socket.free
+              socket.ssl_context.try &.free
+            end
           else
             socket.close rescue nil
           end
@@ -373,10 +402,10 @@ class DNS::Resolver
       when UDPSocket
         reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
 
-        unless reply
+        unless reply.try &.errorType.no_error?
           options.addrinfo.maximumNumberOfMismatchRetries.times do
-            reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
-            break if reply
+            reply = (resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil) || reply
+            break if reply.try &.errorType.no_error?
           end
         end
 
@@ -394,6 +423,12 @@ class DNS::Resolver
 
         socket.close rescue nil
         reply.try { |_reply| reply_packets << _reply }
+
+        case socket
+        when OpenSSL::SSL::Socket::Client
+          socket.free
+          socket.ssl_context.try &.free
+        end
       else
         socket.close rescue nil
       end
@@ -414,7 +449,6 @@ class DNS::Resolver
 
     raise Exception.new String.build { |io| io << "Resolver.resolve!: DNS query failed, Possibly because the server is not responding!" } unless reply.arType.reply?
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The transmissionId of the reply packet does not match the ask transmissionId!" } if ask_packet.transmissionId != reply.transmissionId
-    raise Exception.new String.build { |io| io << "Resolver.resolve!: The errorType of the reply packet is not Packet::ErrorFlag::NoError!" } unless reply.errorType.no_error?
 
     reply
   end
@@ -434,7 +468,7 @@ class DNS::Resolver
     end
 
     buffer = uninitialized UInt8[4096_i32]
-    read_length = socket.read buffer.to_slice
+    read_length = socket.read slice: buffer.to_slice
     raise Exception.new "Resolver.resolve!: DNS query failed, zero bytes have been read!" if read_length.zero?
 
     memory = IO::Memory.new buffer.to_slice[0_i32, read_length]
@@ -443,7 +477,6 @@ class DNS::Resolver
     raise Exception.new String.build { |io| io << "Resolver.resolve!: DNS query failed, Possibly because the server is not responding!" } unless reply
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The arType of the reply packet is not ARType::Reply!" } unless reply.arType.reply?
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The transmissionId of the reply packet does not match the ask transmissionId!" } if ask_packet.transmissionId != reply.transmissionId
-    raise Exception.new String.build { |io| io << "Resolver.resolve!: The errorType of the reply packet is not Packet::ErrorFlag::NoError!" } unless reply.errorType.no_error?
 
     reply.protocolType = ProtocolType::HTTPS if protocol_type.https?
 
