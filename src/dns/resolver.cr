@@ -282,15 +282,38 @@ class DNS::Resolver
   end
 
   def resolve(host : String, record_type : Packet::RecordFlag, ask_packet : Packet) : Tuple(FetchType, Array(Packet))
-    packetCaching.get?(host: host, record_type: record_type).try { |packets| return Tuple.new FetchType::Caching, packets }
+    fetch_type, packets, _rcode = resolve_with_rcode host: host, record_type: record_type, ask_packet: ask_packet
+    Tuple.new fetch_type, packets
+  end
 
-    packets = resolve dns_servers: dnsServers, ask_packet: ask_packet
+  # Like `resolve`, and also returns the outcome, so that an empty result can be told apart:
+  # `NoError` (some server answered NOERROR; packets may hold no answers), `NameError` (NXDOMAIN),
+  # another rcode (e.g. `ServerFailure`, `Refused`), or `nil` when no server replied (timeout or unreachable).
+  # Packets are always the NOERROR replies only, and only those are cached, exactly as with `resolve`.
+  def resolve_with_rcode(host : String, record_type : Packet::RecordFlag, ask_packet : Packet) : Tuple(FetchType, Array(Packet), Packet::ErrorFlag?)
+    packetCaching.get?(host: host, record_type: record_type).try { |packets| return Tuple.new FetchType::Caching, packets, Packet::ErrorFlag::NoError }
+
+    replies = resolve_replies dns_servers: dnsServers, ask_packet: ask_packet
+    packets = replies.select &.errorType.no_error?
     packetCaching.set host: host, record_type: record_type, packets: packets
 
-    Tuple.new FetchType::Remote, packets
+    Tuple.new FetchType::Remote, packets, Resolver.reply_rcode(replies)
+  end
+
+  # NOERROR wins over NXDOMAIN, which wins over any other rcode; nil when there is no reply.
+  def self.reply_rcode(replies : Array(Packet)) : Packet::ErrorFlag?
+    rcodes = replies.map &.errorType
+    return Packet::ErrorFlag::NoError if rcodes.any? &.no_error?
+    return Packet::ErrorFlag::NameError if rcodes.any? &.name_error?
+    rcodes.first?
   end
 
   private def resolve(dns_servers : Set(Address), ask_packet : Packet) : Array(Packet)
+    resolve_replies(dns_servers: dns_servers, ask_packet: ask_packet).select &.errorType.no_error?
+  end
+
+  # One reply per server that replied, whatever its rcode.
+  private def resolve_replies(dns_servers : Set(Address), ask_packet : Packet) : Array(Packet)
     return concurrent_resolve dns_servers: dns_servers, ask_packet: ask_packet if options.addrinfo.concurrentQuery
     regular_resolve dns_servers: dns_servers, ask_packet: ask_packet
   end
@@ -317,10 +340,10 @@ class DNS::Resolver
           when UDPSocket
             reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
 
-            unless reply
+            unless reply.try &.errorType.no_error?
               options.addrinfo.maximumNumberOfMismatchRetries.times do
-                reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
-                break if reply
+                reply = (resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil) || reply
+                break if reply.try &.errorType.no_error?
               end
             end
 
@@ -379,10 +402,10 @@ class DNS::Resolver
       when UDPSocket
         reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
 
-        unless reply
+        unless reply.try &.errorType.no_error?
           options.addrinfo.maximumNumberOfMismatchRetries.times do
-            reply = resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil
-            break if reply
+            reply = (resolve! socket: socket, ask_packet: dup_ask_packet, protocol_type: dns_server.protocolType rescue nil) || reply
+            break if reply.try &.errorType.no_error?
           end
         end
 
@@ -426,7 +449,6 @@ class DNS::Resolver
 
     raise Exception.new String.build { |io| io << "Resolver.resolve!: DNS query failed, Possibly because the server is not responding!" } unless reply.arType.reply?
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The transmissionId of the reply packet does not match the ask transmissionId!" } if ask_packet.transmissionId != reply.transmissionId
-    raise Exception.new String.build { |io| io << "Resolver.resolve!: The errorType of the reply packet is not Packet::ErrorFlag::NoError!" } unless reply.errorType.no_error?
 
     reply
   end
@@ -455,7 +477,6 @@ class DNS::Resolver
     raise Exception.new String.build { |io| io << "Resolver.resolve!: DNS query failed, Possibly because the server is not responding!" } unless reply
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The arType of the reply packet is not ARType::Reply!" } unless reply.arType.reply?
     raise Exception.new String.build { |io| io << "Resolver.resolve!: The transmissionId of the reply packet does not match the ask transmissionId!" } if ask_packet.transmissionId != reply.transmissionId
-    raise Exception.new String.build { |io| io << "Resolver.resolve!: The errorType of the reply packet is not Packet::ErrorFlag::NoError!" } unless reply.errorType.no_error?
 
     reply.protocolType = ProtocolType::HTTPS if protocol_type.https?
 
